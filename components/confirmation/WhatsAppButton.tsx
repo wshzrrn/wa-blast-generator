@@ -204,22 +204,17 @@ Apakah barang diterima sesuai dengan perincian pada DO diatas. Sambil menunggu k
         return;
       }
 
-      const gmailUrl =
-        "https://mail.google.com/mail/?view=cm" +
-        "&fs=1" +
-        "&to=wshzrrn@gmail.com" +
-        `&su=${encodeURIComponent(
+      const mailtoUrl =
+        `mailto:wshzrrn@gmail.com` +
+        `?subject=${encodeURIComponent(
           emailSubject
         )}` +
         `&body=${encodeURIComponent(
           message
         )}`;
 
-      window.open(
-        gmailUrl,
-        "_blank",
-        "noopener,noreferrer"
-      );
+      window.location.href =
+        mailtoUrl;
     };
 
   /* ================================================= */
