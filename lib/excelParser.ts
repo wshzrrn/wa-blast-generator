@@ -1,23 +1,37 @@
 import * as XLSX from "xlsx";
+
 import type {
   ExcelRow,
   DeliveryOrder,
   DeliveryItem,
 } from "../types/delivery";
 
-import { storeContacts } from "../data/storeContacts";
-
 const STORE_PAYER_MAP: Record<
   string,
-  string[]
+  {
+    ds: string[];
+    branch: string[];
+  }
 > = {
-  Griya: ["21G05000"],
-  King: ["21K03000"],
-  "Sumber Jaya": [
-    "21S24000",
-    "21S240DS",
-  ],
-  "Niaga Raya": ["21N08000"],
+  Griya: {
+    ds: ["21G050DS"],
+    branch: ["21G05000"],
+  },
+
+  King: {
+    ds: [],
+    branch: ["21K03000"],
+  },
+
+  "Sumber Jaya": {
+    ds: ["21S240DS"],
+    branch: ["21S24000"],
+  },
+
+  "Niaga Raya": {
+    ds: ["21N080DS"],
+    branch: ["21N08000"],
+  },
 };
 
 function normalizeString(
@@ -30,16 +44,30 @@ function normalizeString(
     return "";
   }
 
-  return String(value).trim();
+  return String(value)
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function normalizePayer(
+  value: unknown
+): string {
+  return normalizeString(value)
+    .toUpperCase();
 }
 
 function parseExcelDate(
   value: unknown
 ): Date | null {
-  if (value instanceof Date) {
-    return value;
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return null;
   }
 
+  // Excel serial number
   if (typeof value === "number") {
     const parsed =
       XLSX.SSF.parse_date_code(value);
@@ -55,16 +83,78 @@ function parseExcelDate(
     );
   }
 
-  if (typeof value === "string") {
-    const date =
-      new Date(value);
+  // Excel date object
+  if (value instanceof Date) {
+    return new Date(
+      value.getFullYear(),
+      value.getMonth(),
+      value.getDate()
+    );
+  }
 
-    if (
-      !Number.isNaN(
-        date.getTime()
-      )
-    ) {
-      return date;
+  if (typeof value === "string") {
+    const text = value.trim();
+
+    // MM/DD/YYYY
+    const usMatch = text.match(
+      /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/
+    );
+
+    if (usMatch) {
+      const month = Number(
+        usMatch[1]
+      );
+
+      const day = Number(
+        usMatch[2]
+      );
+
+      const year = Number(
+        usMatch[3]
+      );
+
+      return new Date(
+        year,
+        month - 1,
+        day
+      );
+    }
+
+    // DD-MM-YYYY / DD/MM/YYYY
+    const localMatch = text.match(
+      /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/
+    );
+
+    if (localMatch) {
+      const first = Number(
+        localMatch[1]
+      );
+
+      const second = Number(
+        localMatch[2]
+      );
+
+      const year = Number(
+        localMatch[3]
+      );
+
+      // Untuk format dengan "-"
+      // kita anggap DD-MM-YYYY.
+      if (text.includes("-")) {
+        return new Date(
+          year,
+          second - 1,
+          first
+        );
+      }
+
+      // Untuk "/" kita anggap
+      // DD/MM/YYYY bila valid.
+      return new Date(
+        year,
+        second - 1,
+        first
+      );
     }
   }
 
@@ -95,10 +185,14 @@ function calculateDoDate(
   invoiceDate: Date
 ): Date {
   const result =
-    new Date(invoiceDate);
+    new Date(
+      invoiceDate
+    );
 
+  // KHUSUS GRIYA CABANG
   if (
-    payerCode === "21G05000"
+    payerCode ===
+    "21G05000"
   ) {
     result.setDate(
       result.getDate() - 3
@@ -111,17 +205,25 @@ function calculateDoDate(
 function findStoreName(
   payerCode: string
 ): string | null {
+  const normalizedPayer =
+    normalizePayer(
+      payerCode
+    );
+
   for (
     const [
       storeName,
-      payerCodes,
+      config,
     ] of Object.entries(
       STORE_PAYER_MAP
     )
   ) {
     if (
-      payerCodes.includes(
-        payerCode
+      config.ds.includes(
+        normalizedPayer
+      ) ||
+      config.branch.includes(
+        normalizedPayer
       )
     ) {
       return storeName;
@@ -140,7 +242,7 @@ export async function parseExcelFile(
   const workbook =
     XLSX.read(buffer, {
       type: "array",
-      cellDates: true,
+      cellDates: false,
     });
 
   const firstSheet =
@@ -162,20 +264,6 @@ export async function parseExcelFile(
       }
     );
 
-  const targetRows =
-    rows.filter((row) => {
-      const payerCode =
-        normalizeString(
-          row.Payer
-        );
-
-      return Boolean(
-        findStoreName(
-          payerCode
-        )
-      );
-    });
-
   const grouped =
     new Map<
       string,
@@ -183,12 +271,16 @@ export async function parseExcelFile(
     >();
 
   for (
-    const row of targetRows
+    const row of rows
   ) {
     const payerCode =
-      normalizeString(
+      normalizePayer(
         row.Payer
       );
+
+    if (!payerCode) {
+      continue;
+    }
 
     const storeName =
       findStoreName(
@@ -242,8 +334,19 @@ export async function parseExcelFile(
         invoiceDate
       );
 
+    /*
+      IMPORTANT:
+      Masukkan payer ke ID supaya
+      DO dari DS dan branch tidak
+      bisa tergabung menjadi satu.
+    */
     const id =
-      `${storeName}-${doNo}-${invoiceNo}`;
+      [
+        storeName,
+        payerCode,
+        doNo,
+        invoiceNo,
+      ].join("-");
 
     let existing =
       grouped.get(id);
@@ -251,23 +354,33 @@ export async function parseExcelFile(
     if (!existing) {
       existing = {
         id,
+
         payerCode,
+
         payerCodes: [
           payerCode,
         ],
+
         storeName,
+
         customerName,
+
         invoiceNo,
+
         doNo,
+
         salesDocNo,
+
         invoiceDate:
           formatDate(
             invoiceDate
           ),
+
         doDate:
           formatDate(
             doDate
           ),
+
         items: [],
       };
 
@@ -277,6 +390,7 @@ export async function parseExcelFile(
       );
     }
 
+    // Simpan payer yang terkait
     if (
       !existing.payerCodes.includes(
         payerCode
@@ -287,16 +401,33 @@ export async function parseExcelFile(
       );
     }
 
-    if (material) {
-      const item: DeliveryItem =
-        {
+    // Jangan duplicate item
+    if (
+      material
+    ) {
+      const existingItem =
+        existing.items.find(
+          (item) =>
+            item.material ===
+            material
+        );
+
+      if (
+        existingItem
+      ) {
+        existingItem.qty +=
+          qty;
+      } else {
+        const item:
+          DeliveryItem = {
           material,
           qty,
         };
 
-      existing.items.push(
-        item
-      );
+        existing.items.push(
+          item
+        );
+      }
     }
   }
 
