@@ -1046,10 +1046,6 @@ ${doText}Apakah barang diterima sesuai dengan perincian pada DO di atas. Sambil 
             WhatsApp Blast Generator
           </h1>
 
-          <p className="mt-3 text-[#756b63]">
-            Pilih DO yang ingin dikonfirmasi dan buat pesan WhatsApp secara otomatis.
-          </p>
-
         </header>
 
         {/* UPLOAD */}
